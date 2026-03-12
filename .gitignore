@@ -1,0 +1,6 @@
+.env
+Server log.md
+src/
+data/
+.idea/
+.vscode/

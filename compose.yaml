@@ -1,0 +1,161 @@
+services:
+  php:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    env_file:
+      - .env
+    environment:
+      APP_DIR: /var/www/html
+      COMPOSER_HOME: /tmp/composer
+    volumes:
+      - magento-src:/var/www/html
+      - composer-cache:/tmp/composer/cache
+    depends_on:
+      db:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9000"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.26-bookworm
+    env_file:
+      - .env
+    depends_on:
+      php:
+        condition: service_healthy
+    ports:
+      - "${HOST_HTTP_PORT}:80"
+    volumes:
+      - magento-src:/var/www/html:ro
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/nginx/start.sh:/usr/local/bin/nginx-wait-and-start:ro
+    command: ["/bin/sh", "/usr/local/bin/nginx-wait-and-start"]
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  cron:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    env_file:
+      - .env
+    environment:
+      APP_DIR: /var/www/html
+      COMPOSER_HOME: /tmp/composer
+    entrypoint: ["/usr/local/bin/magento-cron"]
+    volumes:
+      - magento-src:/var/www/html
+      - composer-cache:/tmp/composer/cache
+    depends_on:
+      php:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  db:
+    image: mariadb:10.6
+    env_file:
+      - .env
+    environment:
+      MARIADB_DATABASE: "${MAGENTO_DB_NAME}"
+      MARIADB_USER: "${MAGENTO_DB_USER}"
+      MARIADB_PASSWORD: "${MAGENTO_DB_PASSWORD}"
+      MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+      - --max_allowed_packet=64M
+      - --innodb-buffer-pool-size=512M
+    ports:
+      - "${HOST_DB_PORT}:3306"
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -uroot -p$${MARIADB_ROOT_PASSWORD} --silent"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_DEFAULT_USER: "${MAGENTO_RABBITMQ_USER}"
+      RABBITMQ_DEFAULT_PASS: "${MAGENTO_RABBITMQ_PASSWORD}"
+      RABBITMQ_DEFAULT_VHOST: "${MAGENTO_RABBITMQ_VHOST}"
+    ports:
+      - "${HOST_RABBITMQ_MANAGEMENT_PORT}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    environment:
+      discovery.type: single-node
+      bootstrap.memory_lock: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms1g -Xmx1g
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "${HOST_OPENSEARCH_PORT}:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200/_cluster/health | grep -Eq '\"status\":\"(yellow|green)\"'"]
+      interval: 20s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  magento-src:
+  composer-cache:
+  db-data:
+  redis-data:
+  rabbitmq-data:
+  opensearch-data:
