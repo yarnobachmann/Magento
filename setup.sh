@@ -11,6 +11,15 @@ if [ ! -f "${ENV_FILE}" ]; then
   echo ".env aangemaakt vanuit .env.example"
 fi
 
+set -a
+. "${ENV_FILE}"
+set +a
+
+if [ -z "${MAGENTO_BASE_URL:-}" ]; then
+  echo "MAGENTO_BASE_URL ontbreekt in .env"
+  exit 1
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker ontbreekt op de host."
   exit 1
@@ -80,6 +89,12 @@ fi
 echo "Magento maintenance mode uitschakelen"
 docker exec "${PHP_CONTAINER}" sh -c 'cd /var/www/html && php bin/magento maintenance:disable || true'
 
+echo "Magento base URL forceren"
+docker exec "${PHP_CONTAINER}" sh -c "cd /var/www/html && php bin/magento config:set web/unsecure/base_url '${MAGENTO_BASE_URL}'"
+docker exec "${PHP_CONTAINER}" sh -c "cd /var/www/html && php bin/magento config:set web/secure/base_url '${MAGENTO_BASE_URL}'"
+docker exec "${PHP_CONTAINER}" sh -c 'cd /var/www/html && php bin/magento config:set web/secure/use_in_frontend 0 || true'
+docker exec "${PHP_CONTAINER}" sh -c 'cd /var/www/html && php bin/magento config:set web/secure/use_in_adminhtml 0 || true'
+
 echo "Magento setup:upgrade uitvoeren"
 docker exec "${PHP_CONTAINER}" sh -c 'cd /var/www/html && php bin/magento setup:upgrade'
 
@@ -111,6 +126,9 @@ $COMPOSE_CMD --env-file "${ENV_FILE}" restart php nginx || true
 echo "Huidige containerstatus"
 $COMPOSE_CMD --env-file "${ENV_FILE}" ps
 
+echo "Huidige Magento base URL"
+docker exec "${PHP_CONTAINER}" sh -c 'cd /var/www/html && php bin/magento config:show web/unsecure/base_url || true'
+
 echo "Setup voltooid"
-echo "Controleer de site via http://mag-dev.internal"
+echo "Controleer de site via ${MAGENTO_BASE_URL}"
 echo "Gebruik '$COMPOSE_CMD --env-file \"${ENV_FILE}\" logs -f php' voor troubleshooting."
